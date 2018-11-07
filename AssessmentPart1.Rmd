@@ -1,0 +1,104 @@
+---
+title: "Assessment Part 1"
+output: html_notebook
+---
+
+```{r eval=FALSE, include=FALSE}
+plot(cars)
+```
+
+This is the map of crime-on-street data aggregated per ward in Camden
+```{r CrimeMap, echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(tidyverse)
+library(geojsonio)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(maptools)
+library(RColorBrewer)
+library(classInt)
+library(sp)
+library(rgeos)
+library(rgdal)
+library(ggmap)
+library(ggplot2)
+
+##Read geometries
+CB1 <- geojson_read("https://opendata.arcgis.com/datasets/da831f80764346889837c72508f046fa_2.geojson", what = "sp")
+CamdenMap <- CB1[grep("^Camden", CB1@data$lsoa11nm),]
+#qtm(CamdenMap)
+
+##Read attribute data
+CamdenCrimeData <- read_csv("https://opendata.camden.gov.uk/resource/yv9v-if37.csv", na = "n/a")
+#plot(CamdenCrimeData$easting, CamdenCrimeData$northing)
+#plot(crimeData$longitude, crimeData$latitude)
+crimeData <- CamdenCrimeData[,c(3,5,9,10,16,17,25,26)]
+
+##Plotting camden map with crime points
+Crime.Points <-SpatialPointsDataFrame(crimeData[,c(5,3)], crimeData,
+                                      proj4string = CRS("+proj=longlat +datum=WGS84"))
+#tm_shape(CamdenMap) + tm_borders(alpha = .5) +
+#tm_shape(Crime.Points) + tm_dots(col = "category", palette = "Accent", size = .08)
+
+##Plot with basemap & ggplot
+camdenbbox1 <- c(left = -0.2137, bottom = 51.5127, right = -0.1053, top = 51.5731)
+#map <- get_stamenmap(camdenbbox1, zoom = 13, maptype = "toner-lite")
+
+##Merge polygon data
+camdenOApoly <- CamdenMap
+OA.count <- nrow(CamdenMap@data)
+camdenOApoly@data$id <- 1:OA.count
+camdenOApoly <- fortify(camdenOApoly, region='id')
+#ggmap(map) + geom_polygon(data = camdenOApoly, aes(x = long, y = lat, group = id), 
+#                          fill = "black", alpha = 0.2) + geom_point(data = crimeData, 
+#                      aes(longitude,latitude,color=category),size=1,alpha=0.7) + 
+#                      labs(x = "Longitude", y = "Latitude",
+#                      title="Crime On The Street", color = "category", palette = "Accent")
+
+##Make thematic map based on aggregate data per ward
+#lookup on ward_code - lsoacode table
+lsoa_to_ward <- read_csv("Lower_Layer_Super_Output_Area_2011_to_Ward_2015_Lookup_in_England_and_Wales.csv", na = "n/a")
+lsoa_to_ward <- lsoa_to_ward[c("LSOA11CD", "WD15CD")]
+colnames(lsoa_to_ward) <- c("lsoa11cd_ward", "ward_code")  
+
+per_ward <- crimeData %>% group_by(category, ward_code, ward_name) %>% 
+  summarise(number_crime =n()) %>% 
+  spread(category, number_crime)
+per_ward <- inner_join(per_ward, lsoa_to_ward)
+per_ward <- data.frame(per_ward)
+
+CamdenTMap <- CamdenMap
+CamdenTMap@data <- data.frame(CamdenTMap@data,per_ward[match(CamdenTMap@data[,"lsoa11cd"],per_ward[,"lsoa11cd_ward"]),])
+
+CamdenTMapSF <- st_as_sf(CamdenTMap)
+CamdenTMapSF <- append_data(CamdenTMapSF, lsoa_to_ward, key.shp = "lsoa11cd", key.data = "lsoa11cd_ward", ignore.duplicates = TRUE)
+
+#qtm(CamdenTMap, fill = "Violence.and.sexual.offences")
+#qtm(CamdenTMapSF, fill = "Anti.social.behaviour")
+#qtm(CamdenTMapSF, fill = "Violence.and.sexual.offences")
+
+##Spatial aggregation - Joining lsoa polygon to ward polygon, make the map into ward map
+CamdenTMapUnion <- unionSpatialPolygons(CamdenTMap, CamdenTMap@data$ward_name)
+#plot(CamdenTMap)
+#plot(CamdenTMapUnion, add = TRUE, border = "red", lwd = 2)
+
+CamdenWardData <- data.frame(CamdenTMap)
+CamdenWardData <- aggregate(CamdenWardData, list(CamdenTMap@data$ward_name), mean)
+row.names(CamdenWardData) <- as.character(CamdenWardData$Group.1)
+CamdenWardTMap <- SpatialPolygonsDataFrame(CamdenTMapUnion, CamdenWardData)
+
+qtm(CamdenWardTMap, fill = "Anti.social.behaviour")
+#qtm(CamdenWardTMap, fill = "Violence.and.sexual.offences")
+```
+
+Basically, this is the workflow on how I created this map on R:
+
+1. Read geometries and attribute data
+
+2. Try to plot the point data
+
+3. Aggregate attribute data per-ward, then match with the spatial data
+
+4. Do spatial aggregation to create ward-level map by joining multiple polygons and attach the merged data
+
+
